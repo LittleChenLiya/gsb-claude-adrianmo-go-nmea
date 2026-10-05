@@ -1,6 +1,7 @@
 package nmea
 
 import (
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
@@ -273,21 +274,47 @@ func (p *Parser) SixBitASCIIArmour(i int, fillBits int, context string) []byte {
 		return nil
 	}
 
-	payload := []byte(p.String(i, "encoded payload"))
+	payload := p.String(i, "encoded payload")
+	if p.err != nil {
+		return nil
+	}
+
+	result, err := decodeSixBitASCIIArmour(payload, fillBits)
+	if err != nil {
+		p.SetErr(context, err.Error())
+		return nil
+	}
+	return result
+}
+
+// errors returned by decodeSixBitASCIIArmour
+var (
+	errArmourFillBits = errors.New("fill bits")
+	errArmourNumBits  = errors.New("num bits")
+	errArmourDataByte = errors.New("data byte")
+)
+
+// decodeSixBitASCIIArmour decodes the 6-bit ascii armor used for VDM and VDO
+// messages into a bit slice (one byte per bit, 0 or 1). fillBits is the number
+// of padding bits at the end of the armored payload.
+func decodeSixBitASCIIArmour(payload string, fillBits int) ([]byte, error) {
+	if fillBits < 0 || fillBits >= 6 {
+		return nil, errArmourFillBits
+	}
+
 	numBits := len(payload)*6 - fillBits
 
 	if numBits < 0 {
-		p.SetErr(context, "num bits")
-		return nil
+		return nil, errArmourNumBits
 	}
 
 	result := make([]byte, numBits)
 	resultIndex := 0
 
-	for _, v := range payload {
+	for i := 0; i < len(payload); i++ {
+		v := payload[i]
 		if v < 48 || v >= 120 {
-			p.SetErr(context, "data byte")
-			return nil
+			return nil, errArmourDataByte
 		}
 
 		d := v - 48
@@ -295,11 +322,11 @@ func (p *Parser) SixBitASCIIArmour(i int, fillBits int, context string) []byte {
 			d -= 8
 		}
 
-		for i := 5; i >= 0 && resultIndex < len(result); i-- {
-			result[resultIndex] = (d >> uint(i)) & 1
+		for j := 5; j >= 0 && resultIndex < len(result); j-- {
+			result[resultIndex] = (d >> uint(j)) & 1
 			resultIndex++
 		}
 	}
 
-	return result
+	return result, nil
 }
