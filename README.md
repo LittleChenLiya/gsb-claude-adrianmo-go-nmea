@@ -438,6 +438,90 @@ GroundSpeedKnots: {8.04 true}
 GroundSpeedKPH: {14.89 true}
 ```
 
+### VDM/VDO message reassembly
+
+VDM/VDO sentences (`!AIVDM`/`!AIVDO`) are used to encapsulate generic binary
+payloads (most commonly AIS). A payload that does not fit in one sentence is
+split across several fragments. `nmea.VDMReassembler` reassembles the fragments
+of a message, binding them by **talker, sequence number and channel**.
+Out-of-order fragments are staged until the message completes or the
+reassembly window elapses. Duplicate fragments are idempotent only when their
+payload is identical; conflicting fragments are rejected. The reassembler only
+concatenates the armored payload — it never interprets the vessel data.
+
+The reassembly window and clock are configurable, which makes the behavior
+deterministic and testable:
+
+```go
+package main
+
+import (
+	"fmt"
+	"time"
+
+	"github.com/adrianmo/go-nmea"
+)
+
+func main() {
+	r := nmea.NewVDMReassembler(time.Minute, nil) // nil clock uses time.Now
+
+	sentences := []string{
+		"!AIVDM,2,1,7,B,13aGt0PP0jPN@9fMPKVDJ,0*24",
+		"!AIVDM,2,1,7,B,13aGt0PP0jPN@9fMPKVDJ,0*24", // duplicate of fragment 1
+		"!AIVDM,2,2,7,B,00000000000,2*20",
+		"!AIVDM,1,1,,A,13aGt0PP0jPN@9fMPKVDJgwfR>`<,0*55",
+	}
+
+	for _, raw := range sentences {
+		res, err := r.AddRaw(raw)
+		if err != nil {
+			fmt.Println("error:", err)
+			continue
+		}
+		if res.Complete != nil {
+			fmt.Printf("complete: talker=%s type=%s channel=%s id=%d armor=%s bits=%d\n",
+				res.Complete.Talker, res.Complete.Type, res.Complete.Channel,
+				res.Complete.MessageID, res.Complete.Armor, len(res.Complete.Payload))
+		}
+	}
+}
+```
+
+Output:
+
+```
+$ go run main/main.go
+
+complete: talker=AI type=VDM channel=B id=7 armor=13aGt0PP0jPN@9fMPKVDJ00000000000 bits=190
+complete: talker=AI type=VDM channel=A id=0 armor=13aGt0PP0jPN@9fMPKVDJgwfR>`< bits=168
+```
+
+Fragments that never complete within the window are returned as incomplete
+receipts by `Expire()`:
+
+```go
+now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+r := nmea.NewVDMReassembler(time.Minute, func() time.Time { return now })
+r.AddRaw("!AIVDM,2,1,4,A,00000000000,0*21")
+now = now.Add(2 * time.Minute)
+for _, inc := range r.Expire() {
+	fmt.Printf("incomplete: talker=%s channel=%s id=%d total=%d got=%v reason=%s\n",
+		inc.Talker, inc.Channel, inc.MessageID, inc.Total, inc.Fragments, inc.Reason)
+}
+```
+
+Output:
+
+```
+incomplete: talker=AI channel=A id=4 total=2 got=[1] reason=reassembly window elapsed
+```
+
+Run the reassembler tests with:
+
+```
+$ go test -run 'TestVDMReassembler|ExampleVDMReassembler' -race ./...
+```
+
 ## Contributing
 
 Please feel free to submit issues or fork the repository and send pull requests to update the library and fix bugs,
