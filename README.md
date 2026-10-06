@@ -7,6 +7,7 @@ This is a NMEA library for the Go programming language (Golang).
 ## Features
 
 - Parse individual NMEA 0183 sentences
+- Assemble sentences incrementally from arbitrary byte chunks (`Streamer`)
 - Support for sentences with NMEA 4.10 "TAG Blocks"
 - Register custom parser for unsupported sentence types
 - User-friendly MIT license
@@ -192,6 +193,53 @@ parser could be beneficial to other users we encourage you to contribute back to
 it included in the list of supported sentences.
 
 ## Examples
+
+### Incremental (streaming) sentence input
+
+The `Streamer` assembles NMEA 0183 sentences from arbitrary byte chunks (e.g. as
+read from a serial port or TCP socket). Bytes may be fed in chunks of any size —
+including one byte at a time — and each sentence is delivered exactly once, only
+after its terminator and a valid checksum have been seen. Partial sentences are
+never handed to the parser.
+
+- Garbage before/between sentences is reported with an explicit skip receipt
+  (`WithOnSkip`) containing the exact discarded bytes.
+- A bad checksum is reported as `*nmea.ChecksumError`, an unsupported
+  talker/sentence type as `*nmea.NotSupportedError`, so the two can be
+  attributed separately.
+- After any error the streamer resynchronizes only at an explicit new sentence
+  start (`$`, `!` or a tag block `\`), so the next valid sentence is never lost.
+- The sentence length is limited (`WithMaxSentenceLength`, default
+  `DefaultMaxSentenceLength` = 1024 bytes); an unterminated oversized sentence
+  is rejected with `*nmea.TooLongError` and the buffer cannot grow without bound.
+- The accepted line ending is configured explicitly with `WithTerminator`:
+  `TerminatorAny` (default, LF or CRLF), `TerminatorCRLF` (strict) or
+  `TerminatorLF`.
+
+```go
+st := nmea.NewStreamer(
+    nmea.WithTerminator(nmea.TerminatorAny),
+    nmea.WithMaxSentenceLength(1024),
+    nmea.WithOnSentence(func(s nmea.Sentence) { fmt.Println(s.Prefix()) }),
+    nmea.WithOnSkip(func(garbage []byte) { log.Printf("skipped %q", garbage) }),
+    nmea.WithOnError(func(err error, raw string) { log.Printf("error: %v (%q)", err, raw) }),
+)
+st.Feed(chunk) // call with every chunk of bytes read from the wire
+```
+
+Example input sentences (all checksum-valid):
+
+```
+$GNRMC,220516,A,5133.82,N,00042.24,W,173.8,231.8,130694,004.2,W*6E
+$GPGGA,123519,4807.038,N,01131.000,E,1,08,0.9,545.4,M,46.9,M,,*47
+$GPGSA,A,3,22,19,18,27,14,03,,,,,,,3.1,2.0,2.4*36
+```
+
+Run the streaming tests with:
+
+```
+go test -run 'TestStreamer|ExampleStreamer' -v .
+```
 
 ### Built-in message parsing
 
