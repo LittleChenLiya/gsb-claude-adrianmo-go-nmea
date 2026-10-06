@@ -438,6 +438,51 @@ GroundSpeedKnots: {8.04 true}
 GroundSpeedKPH: {14.89 true}
 ```
 
+## Position fix aggregation (GGA + RMC)
+
+A position fix is typically produced by two sentences: GGA (fix quality,
+coordinates, altitude) and RMC (validity, date, speed, course).
+`PositionAggregator` combines them explicitly, without relying on the order
+they happen to arrive:
+
+- GGA and RMC are paired only when they share the same talker id and the exact
+  same real UTC time of day (`hhmmss.ss`).
+- The date is taken only from the RMC date field. A GGA without a matching,
+  same-instant RMC never gets a guessed date (in particular around midnight),
+  and the fix is emitted with `DateKnown == false`.
+- The validity states of the two sentences are preserved as parsed. An RMC with
+  validity `V` can never make a GGA fix valid; such a pair is not a complete
+  fix.
+- Late sentences are handled with a finite window of stream time
+  (`DefaultPositionMaxLate`, 30s). Sentences whose mate does not arrive within
+  the window are emitted as stale, partial fixes instead of being buffered
+  forever.
+- When the GGA and RMC coordinates for the same instant disagree by more than
+  `DefaultPositionCoordTolerance` (10m), the fix is marked `Uncertain` and is
+  not complete.
+- `Complete` (and `Valid`) is set only when the rules establish the full fix;
+  every emitted fix keeps the originating sentence type and raw sentence in
+  `Sources`.
+
+```go
+a := nmea.NewPositionAggregator()
+a.ReferenceYear = 2026 // two-digit RMC year resolution; 0 = current UTC year
+
+fixes, err := a.Add("$GPGGA,120001.00,5955.1234,N,01043.5678,E,1,08,1.2,10.0,M,30.0,M,,*55")
+// ...
+fixes, err = a.Add("$GPRMC,120001.00,A,5955.1234,N,01043.5678,E,10.5,45.0,061026,,,A*58")
+for _, f := range fixes {
+    // f.Complete && f.Valid, f.Time is the real UTC instant, f.Sources keeps
+    // both the GGA and the RMC in a deterministic order.
+    fmt.Println(f.Talker, f.Time, f.Complete, f.Valid)
+}
+
+// Emit any sentences whose mate never arrived (partial fixes, date not guessed).
+for _, f := range a.Flush() {
+    fmt.Println(f.Talker, f.DateKnown, f.Complete)
+}
+```
+
 ## Contributing
 
 Please feel free to submit issues or fork the repository and send pull requests to update the library and fix bugs,
