@@ -31,6 +31,11 @@ type RMC struct {
 	Variation float64 // Magnetic variation
 	FFAMode   string  // FAA mode indicator (filled in NMEA 2.3 and later)
 	NavStatus string  // Nav Status (NMEA 4.1 and later)
+	// Extensions holds any trailing fields beyond the last known RMC field
+	// (navigation status, field index 12). Values are kept as raw strings
+	// together with their positions; empty tail fields are preserved.
+	// It is nil when the sentence carries no unknown trailing fields.
+	Extensions []ExtensionField
 }
 
 // newRMC constructor
@@ -63,6 +68,9 @@ func newRMC(s BaseSentence, opts ...ParserOption) (Sentence, error) {
 			NavStatusUnsafe,
 			NavStatusNotValid,
 		)
+	}
+	if len(p.Fields) > 13 {
+		m.Extensions = p.ExtensionFields(13)
 	}
 	return m, p.Err()
 }

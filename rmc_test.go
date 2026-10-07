@@ -134,6 +134,52 @@ var rmctests = []struct {
 			NavStatus: NavStatusCaution,
 		},
 	},
+	{
+		name: "good sentence H with two extension fields",
+		raw:  "$GNRMC,102014.00,A,5550.6082,N,03732.2488,E,000.00000,092.9,300518,,,A,V,EXT1,EXT2*38",
+		msg: RMC{
+			Time:      Time{Valid: true, Hour: 10, Minute: 20, Second: 14, Millisecond: 0},
+			Validity:  "A",
+			Latitude:  55.843469999999996,
+			Longitude: 37.537479999999995,
+			Speed:     0,
+			Course:    92.9,
+			Date:      Date{Valid: true, DD: 30, MM: 5, YY: 18},
+			Variation: 0,
+			FFAMode:   FAAModeAutonomous,
+			NavStatus: NavStatusNotValid,
+			Extensions: []ExtensionField{
+				{Index: 13, Value: "EXT1"},
+				{Index: 14, Value: "EXT2"},
+			},
+		},
+	},
+	{
+		name: "good sentence I with empty tail extension field",
+		raw:  "$GNRMC,102014.00,A,5550.6082,N,03732.2488,E,000.00000,092.9,300518,,,A,V,X,,Y*16",
+		msg: RMC{
+			Time:      Time{Valid: true, Hour: 10, Minute: 20, Second: 14, Millisecond: 0},
+			Validity:  "A",
+			Latitude:  55.843469999999996,
+			Longitude: 37.537479999999995,
+			Speed:     0,
+			Course:    92.9,
+			Date:      Date{Valid: true, DD: 30, MM: 5, YY: 18},
+			Variation: 0,
+			FFAMode:   FAAModeAutonomous,
+			NavStatus: NavStatusNotValid,
+			Extensions: []ExtensionField{
+				{Index: 13, Value: "X"},
+				{Index: 14, Value: ""}, // empty tail field is preserved, not filtered
+				{Index: 15, Value: "Y"},
+			},
+		},
+	},
+	{
+		name: "missing required fields still fails",
+		raw:  "$GNRMC,220516,A,5133.82*1A",
+		err:  "nmea: GNRMC invalid latitude: index out of range",
+	},
 }
 
 func TestRMC(t *testing.T) {
