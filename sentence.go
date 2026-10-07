@@ -136,6 +136,20 @@ func (p *SentenceParser) parserOptions() []ParserOption {
 }
 
 func (p *SentenceParser) parseBaseSentence(raw string) (BaseSentence, error) {
+	sentence, err := p.parseBaseSentenceEx(raw)
+	if err != nil {
+		// keep the historical behaviour: no partial sentence is exposed on error
+		return BaseSentence{}, err
+	}
+	return sentence, nil
+}
+
+// parseBaseSentenceEx behaves like parseBaseSentence but, when checksum
+// validation fails, it returns the partially parsed sentence together with a
+// *ChecksumError so diagnostic callers can inspect the original talker,
+// sentence type and raw fields. All other (format) errors behave exactly as
+// in parseBaseSentence.
+func (p *SentenceParser) parseBaseSentenceEx(raw string) (BaseSentence, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return BaseSentence{}, errors.New("nmea: can not parse empty input")
@@ -192,7 +206,7 @@ func (p *SentenceParser) parseBaseSentence(raw string) (BaseSentence, error) {
 		err = p.CheckCRC(sentence, rawFields)
 	}
 	if err != nil {
-		return BaseSentence{}, err
+		return sentence, &ChecksumError{Sentence: sentence, Err: err}
 	}
 	return sentence, nil
 }
