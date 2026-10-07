@@ -487,6 +487,44 @@ func TestParser(t *testing.T) {
 				return p.HexInt64(0, "context")
 			},
 		},
+		{
+			name:   "Extensions keeps unknown tail including empty fields",
+			fields: []string{"known", "XX", "", "YY", ""},
+			parse: func(p *Parser) interface{} {
+				assert.Equal(t, []ExtensionField{
+					{Index: 1, Value: "XX"},
+					{Index: 2, Value: ""},
+					{Index: 3, Value: "YY"},
+					{Index: 4, Value: ""},
+				}, p.Extensions(1))
+				return nil
+			},
+		},
+		{
+			name:   "Extensions with start index past the end returns nil",
+			fields: []string{"known"},
+			parse: func(p *Parser) interface{} {
+				assert.Nil(t, p.Extensions(1))
+				return nil
+			},
+		},
+		{
+			name:   "Extensions with negative start index returns nil",
+			fields: []string{"known", "XX"},
+			parse: func(p *Parser) interface{} {
+				assert.Nil(t, p.Extensions(-1))
+				return nil
+			},
+		},
+		{
+			name:   "Extensions does not set a parser error",
+			fields: []string{"known", "XX"},
+			parse: func(p *Parser) interface{} {
+				_ = p.Extensions(1)
+				assert.NoError(t, p.Err())
+				return nil
+			},
+		},
 	}
 
 	for _, tt := range parsertests {

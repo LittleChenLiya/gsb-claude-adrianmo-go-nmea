@@ -94,6 +94,25 @@ func (p *Parser) ListString(from int, context string) (list []string) {
 	return append(list, p.Fields[from:]...)
 }
 
+// Extensions returns every field from the given start index (inclusive) as an
+// unparsed ExtensionField, preserving each raw value together with its original
+// field index. It is meant to collect unknown trailing ("reserved"/extension)
+// fields of variable-length sentences after all known fields have been parsed.
+//
+// Unlike ListString it never sets a parser error and never filters fields: an
+// empty trailing field is returned with an empty Value, and a start index at or
+// past the end of the fields yields an empty (nil) list.
+func (p *Parser) Extensions(from int) []ExtensionField {
+	if p.err != nil || from < 0 || from >= len(p.Fields) {
+		return nil
+	}
+	ext := make([]ExtensionField, 0, len(p.Fields)-from)
+	for i := from; i < len(p.Fields); i++ {
+		ext = append(ext, ExtensionField{Index: i, Value: p.Fields[i]})
+	}
+	return ext
+}
+
 // EnumString returns the field value at the specified index.
 // An error occurs if the value is not one of the options and not empty.
 func (p *Parser) EnumString(i int, context string, options ...string) string {
