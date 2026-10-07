@@ -259,6 +259,28 @@ p := nmea.SentenceParser{
 s, err := p.Parse("$GPRMC,220516,A,5133.82,N,00042.24,W,173.8,231.8,130694,004.2,W*70")
 ```
 
+### Diagnostic parsing (checksum failures)
+
+`Parse` only returns trusted, typed sentences (e.g. `GGA`/`RMC`). When a sentence fails its checksum, parsing is aborted. For read-only diagnostics there is `Diagnose` (package level) and `SentenceParser.Diagnose` (instance level): they never construct a trusted positioning object, but on a checksum failure they still return the original talker id, sentence type and raw fields.
+
+Format/structural errors (bad header, missing delimiters, ...) and checksum errors are reported separately as `*FormatError` (matchable with `errors.Is(err, nmea.ErrFormat)`) and `*ChecksumError` (matchable with `errors.Is(err, nmea.ErrChecksum)`). Both wrap and preserve the original parser error in the chain.
+
+```go
+d := nmea.Diagnose("$GNGGA,203415.000,6325.6138,N,01021.4290,E,1,8,2.42,72.5,M,41.5,M,,*00")
+// d.Kind   == nmea.DiagnosticChecksumError
+// d.Talker == "GN", d.Type == "GGA", d.Fields holds the original (untrusted) fields
+// errors.Is(d.Err, nmea.ErrChecksum) == true
+// d.TrustedSentence() == false // no GGA/RMC object is ever produced here
+```
+
+The regular `Parse` behavior is unchanged. If you additionally want `Parse` itself to bypass object construction on checksum failures with a typed `*ChecksumError` (still without producing a trusted sentence), opt in with `DiagnoseChecksumFailure: true`; leaving it unset keeps using the original interface exactly as before.
+
+```go
+p := nmea.SentenceParser{DiagnoseChecksumFailure: true}
+s, err := p.Parse("$GNGGA,203415.000,6325.6138,N,01021.4290,E,1,8,2.42,72.5,M,41.5,M,,*00")
+// s == nil; err is *nmea.ChecksumError carrying the unverified base sentence
+```
+
 ### TAG Blocks
 
 NMEA 4.10 TAG Block values can be accessed via the message's `TagBlock` struct:

@@ -121,6 +121,18 @@ type SentenceParser struct {
 	// NullInt64 will return Int64{Value: math.MaxInt64, Valid: false} for empty fields.
 	// Int64 (which returns NullInt64.Value) will return math.MaxInt64 for empty fields.
 	MaxInt64ForEmptyInt bool
+
+	// DiagnoseChecksumFailure is an opt-in flag. When enabled, Parse does not
+	// hard-fail with the raw checksum error when a sentence fails checksum
+	// verification: it returns a *ChecksumError (matching ErrChecksum) that
+	// wraps the original error and carries the unverified base sentence
+	// (original talker id, sentence type and fields). No typed/trusted Sentence
+	// (e.g. a positioning object such as GGA/RMC) is produced in that case.
+	//
+	// The flag is disabled by default, in which case Parse behaves exactly as
+	// before. Structural/format errors (bad header, missing delimiters, ...)
+	// are never bypassed and are reported as *FormatError only by Diagnose.
+	DiagnoseChecksumFailure bool
 }
 
 // parserOptions returns the ParserOption slice derived from the SentenceParser configuration.
@@ -136,27 +148,42 @@ func (p *SentenceParser) parserOptions() []ParserOption {
 }
 
 func (p *SentenceParser) parseBaseSentence(raw string) (BaseSentence, error) {
-	raw = strings.TrimSpace(raw)
-	if raw == "" {
-		return BaseSentence{}, errors.New("nmea: can not parse empty input")
-	}
-	tagBlock, tagBlockLen, err := ParseTagBlock(raw)
+	s, _, _, err := p.parseBaseSentenceDetailed(raw)
 	if err != nil {
 		return BaseSentence{}, err
 	}
+	return s, nil
+}
+
+// parseBaseSentenceDetailed performs the base sentence parsing and returns the
+// assembled (not yet trusted) sentence together with rawFields. On error the
+// returned sentence contains whatever information could be recovered before the
+// failure (original talker id, sentence type and raw fields) so diagnostic
+// callers can inspect it; parseBaseSentence discards it to preserve the
+// historical behavior of Parse. crcCheckFailed reports whether the failure was
+// produced by the checksum verification stage rather than a format stage.
+func (p *SentenceParser) parseBaseSentenceDetailed(raw string) (sentence BaseSentence, rawFields string, crcCheckFailed bool, err error) {
+	original := strings.TrimSpace(raw)
+	if original == "" {
+		return BaseSentence{}, "", false, errors.New("nmea: can not parse empty input")
+	}
+	tagBlock, tagBlockLen, err := ParseTagBlock(original)
+	if err != nil {
+		return BaseSentence{}, "", false, err
+	}
 	if tagBlockLen > 0 && p.OnTagBlock != nil {
 		if err := p.OnTagBlock(tagBlock); err != nil {
-			return BaseSentence{}, err
+			return BaseSentence{}, "", false, err
 		}
 	}
-	raw = raw[tagBlockLen:]
+	raw = original[tagBlockLen:]
 
 	startIndex := strings.IndexAny(raw, SentenceStart+SentenceStartEncapsulated)
 	if startIndex != 0 {
-		return BaseSentence{}, errors.New("nmea: sentence does not start with a '$' or '!'")
+		return BaseSentence{Raw: original}, raw, false, errors.New("nmea: sentence does not start with a '$' or '!'")
 	}
 	checksumSepIndex := strings.Index(raw, ChecksumSep)
-	rawFields := raw[startIndex+1:]
+	rawFields = raw[startIndex+1:]
 	checksumRaw := ""
 	if checksumSepIndex != -1 {
 		rawFields = raw[startIndex+1 : checksumSepIndex]
@@ -176,9 +203,9 @@ func (p *SentenceParser) parseBaseSentence(raw string) (BaseSentence, error) {
 		talkerID, typ, err = p.ParsePrefix(fields[0])
 	}
 	if err != nil {
-		return BaseSentence{}, err
+		return BaseSentence{Raw: original}, rawFields, false, err
 	}
-	sentence := BaseSentence{
+	sentence = BaseSentence{
 		Talker:   talkerID,
 		Type:     typ,
 		Fields:   fields[1:],
@@ -192,9 +219,9 @@ func (p *SentenceParser) parseBaseSentence(raw string) (BaseSentence, error) {
 		err = p.CheckCRC(sentence, rawFields)
 	}
 	if err != nil {
-		return BaseSentence{}, err
+		return sentence, rawFields, true, err
 	}
-	return sentence, nil
+	return sentence, rawFields, false, nil
 }
 
 // CheckCRC is default implementation for checking sentence Checksum
@@ -289,8 +316,16 @@ func Parse(raw string) (Sentence, error) {
 // Parse parses the given string into the correct sentence type.
 // This method is not co-routine safe!
 func (p *SentenceParser) Parse(raw string) (Sentence, error) {
-	s, err := p.parseBaseSentence(raw)
+	s, rawFields, crcFailed, err := p.parseBaseSentenceDetailed(raw)
 	if err != nil {
+		if p.DiagnoseChecksumFailure && crcFailed && s.Checksum != "" {
+			return nil, &ChecksumError{
+				Expected: Checksum(rawFields),
+				Actual:   s.Checksum,
+				Sentence: cloneBaseSentence(s),
+				Err:      err,
+			}
+		}
 		return nil, err
 	}
 
