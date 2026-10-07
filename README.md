@@ -259,6 +259,64 @@ p := nmea.SentenceParser{
 s, err := p.Parse("$GPRMC,220516,A,5133.82,N,00042.24,W,173.8,231.8,130694,004.2,W*70")
 ```
 
+### Incremental stream parsing
+
+`Parse` parses one complete sentence at a time. When reading from a serial port,
+socket or file, sentences can arrive split across arbitrary byte chunks, mixed
+with garbage, half sentences or corrupted data. `StreamReader` is an
+incremental framer that assembles sentences from their real start token (`$` or
+`!`) and their `*XX` checksum out of any byte stream:
+
+- Every complete, checksum-valid sentence is handed to the parser and delivered
+  exactly once. Chunk boundaries (even one byte at a time) are irrelevant.
+- Garbage prefixes and inter-sentence noise never reach the parser; they are
+  reported explicitly as `EventSkipped` receipts.
+- Half sentences are never handed to the parser; at `Flush` they are reported as
+  `EventMalformed`.
+- A wrong checksum is attributed as `EventChecksumError`; a checksum-valid
+  sentence with no registered parser is attributed separately as
+  `EventUnsupportedSentence` (its error unwraps to `*NotSupportedError`); other
+  parser failures are `EventParseError`.
+- Resynchronisation after any error only resumes at an explicit new `$`/`!`
+  start token, so the next valid sentence is never lost.
+- Each sentence is bounded by `DefaultMaxSentenceLength` (82 bytes per NMEA0183,
+  configurable with `WithMaxSentenceLength`); an overlong candidate is reported
+  as `EventTooLong` and its buffer is released, so memory never grows without
+  bound.
+- Terminator policy is explicit: by default the CR/LF terminator is optional and
+  a sentence is delivered at the second checksum digit; pass
+  `WithStrictTerminators(true)` to require a full CRLF before delivery.
+
+The reader implements `io.Writer`; call `Flush` at end of input.
+
+```go
+reader := nmea.NewStreamReader(func(e nmea.Event) {
+    switch e.Kind {
+    case nmea.EventSentence:
+        fmt.Printf("sentence %s: %s\n", e.Sentence.DataType(), string(e.Data))
+    case nmea.EventSkipped:
+        fmt.Printf("skipped %q\n", string(e.Data))
+    case nmea.EventChecksumError:
+        fmt.Printf("bad checksum: %v\n", e.Err)
+    case nmea.EventUnsupportedSentence:
+        fmt.Printf("unsupported talker/type: %v\n", e.Err)
+    case nmea.EventMalformed, nmea.EventTooLong, nmea.EventParseError:
+        fmt.Printf("%s: %v\n", e.Kind, e.Err)
+    }
+})
+
+// Any chunk boundaries work; a garbage prefix, a corrupted sentence and two
+// valid sentences all get distinct, non-duplicated outcomes.
+_, _ = reader.Write([]byte("noise\r\n"))
+_, _ = reader.Write([]byte("$GPRMC,...,*71\r\n")) // bad checksum
+_, _ = reader.Write([]byte("$GPGGA,...*51"))       // valid: still recovered
+reader.Flush()
+```
+
+A custom `*SentenceParser` (custom parsers, prefix/CRC hooks, NaN options) can
+be supplied with `WithSentenceParser`. The existing package-level `Parse`
+function is unchanged and remains available for single complete sentences.
+
 ### TAG Blocks
 
 NMEA 4.10 TAG Block values can be accessed via the message's `TagBlock` struct:
